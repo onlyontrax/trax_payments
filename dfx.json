@@ -1,8 +1,22 @@
 {
   "canisters": {
+    "ledger": {
+      "type": "custom",
+      "wasm": "ledger.wasm",
+      "candid": "ledger.public.did",
+      "remote": {
+        "candid": "ledger.public.did",
+        "id": {
+          "ic": "ryjl3-tyaaa-aaaaa-aaaba-cai"
+        }
+      }
+    },
     "trax_payments_backend": {
       "main": "src/trax_payments_backend/main.mo",
-      "type": "motoko"
+      "type": "motoko",
+      "dependencies": [
+        "ledger"
+      ]
     },
     "trax_payments_frontend": {
       "dependencies": [
@@ -19,6 +33,9 @@
     }
   },
   "defaults": {
+    "replica": {
+      "subnet_type":"system"
+    },
     "build": {
       "args": "",
       "packtool": ""
@@ -27,7 +44,7 @@
   "dfx": "0.11.2",
   "networks": {
     "local": {
-      "bind": "127.0.0.1:8000",
+      "bind": "127.0.0.1:8001",
       "type": "ephemeral"
     }
   },
