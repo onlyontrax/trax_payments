@@ -19,17 +19,17 @@ import U          "./utils";
 import Hex        "./Hex";
 import Blob       "mo:base/Blob";
 import Array      "mo:base/Array";
+import Buffer      "mo:base/Buffer";
 
 actor Payments {
-  // minter phrase: hundorp
+  // minter2 phrase: hundorp
 
   // TODO
   // * Top up trax token balance with ICP
   //    - Integrate exhange rate smart contract for live price fetching (to convert ICP into tokens)
   //    - hashmap to track payments and query in future
   //    - Func should take principal of fan only and send funds to trax account
-  // * Orthogonal persistence for hashmaps
-  // * Enable royalty-sharing for PPV content via smart contract
+  // * Enable royalty-sharing for PPV content
 
   type ContentID              = T.ContentID;
   type Content                = T.Content;
@@ -43,6 +43,7 @@ actor Payments {
   type ParticipantID          = T.ParticipantID;
   public type Participants    = T.Participants;
   private type FanPaymentInfo = Map.HashMap<ContentID, Nat64>;
+  private type ArtistContentInfo = Map.HashMap<ContentID, Nat64>;
   private type TippingInfo    = Map.HashMap<FanID, Nat64>;
 
   
@@ -53,17 +54,18 @@ actor Payments {
   let FEE : Nat64 = 10000;
 
   //PPV
-  private stable var _contentMapState : [(ContentID, Content)] = [];
+  private stable var _contentMap : [(ContentID, Content)] = [];
   private stable var _artistTotalContentMap : [(ArtistID, Nat64)] = [];
-  private stable var _fanPaymentMapState : [(FanID, (ContentID, Nat64))]= [];
+  private stable var _fanPaymentMap : [(FanID, (ContentID, Nat64))] = [];
 
   var contentMap = Map.HashMap<ContentID, Content>(1, Text.equal, Text.hash);
-  var artistTotalContentMap = Map.HashMap<ArtistID, Nat64>(1, Principal.equal, Principal.hash); ///finished here
+  var artistTotalContentMap = Map.HashMap<ArtistID, Nat64>(1, Principal.equal, Principal.hash); // total amount received from all content purchases
+  var artistTotalPerContentMap = Map.HashMap<FanID, ArtistContentInfo>(1, Principal.equal, Principal.hash); // total amount received for each contentID 
   var fanPaymentMap = Map.HashMap<FanID, FanPaymentInfo>(1, Principal.equal, Principal.hash);
 
   //TIPPING 
-  private stable var _artistTotalMapState : [(ArtistID, Nat64)] = [];
-
+  private stable var _artistTotalMap : [(ArtistID, Nat64)] = [];
+  private stable var _tippingMap : [(ArtistID, (FanID, Nat64))] = [];
   
   var tippingMap = Map.HashMap<ArtistID, TippingInfo>(1, Principal.equal, Principal.hash); 
   var artistTotalTipsMap = Map.HashMap<ArtistID, Nat64>(1, Principal.equal, Principal.hash);
@@ -73,47 +75,131 @@ actor Payments {
 
   var tokensMap = Map.HashMap<ArtistID, (Nat64, Nat32)>(1, Principal.equal, Principal.hash);
 
+
+
+
+
+
+
+
+
+
 // #region - Upgrading state
   system func preupgrade() {
-    _contentMapState := Iter.toArray(contentMap.entries());
-    _artistTotalMapState := Iter.toArray(artistTotalTipsMap.entries());
+    _contentMap := Iter.toArray(contentMap.entries());
+    _artistTotalMap := Iter.toArray(artistTotalTipsMap.entries());
     _artistTotalContentMap := Iter.toArray(artistTotalContentMap.entries());
     _tokensMap := Iter.toArray(tokensMap.entries());
 
-    _fanPaymentMapState := [];
+    _fanPaymentMap := [];
         for (fanPayment in fanPaymentMap.entries()){
-            // entry1: (Nat, OfferInfo)
+            // entry1: (FanID, FanPaymentInfo)
             let fanID : FanID = fanPayment.0;
             let paymentInfo: FanPaymentInfo = fanPayment.1;
             for (payment in paymentInfo.entries()){
-                // offer : (Principal,(Price,Time.Time))
+                // offer : (ContentID, Nat64)
                 let id : ContentID = payment.0;
                 let price : Nat64 = payment.1;
   
-                _fanPaymentMapState := Array.append(_fanPaymentMapState, [(fanID,(id, price))])
+                _fanPaymentMap := Array.append(_fanPaymentMap, [(fanID,(id, price))])
+            };
+        };
+    
+    _tippingMap := [];
+        for (tipping in tippingMap.entries()){
+            // entry1: (Nat, OfferInfo)
+            let artistID : FanID = tipping.0;
+            let tippingInfo: TippingInfo = tipping.1;
+            for (info in tippingInfo.entries()){
+                // offer : (Principal,(Price,Time.Time))
+                let fanID : FanID = info.0;
+                let amount : Nat64 = info.1;
+  
+                _tippingMap := Array.append(_tippingMap, [(artistID,(fanID, amount))])
             };
         };
   };
 
+
   system func postupgrade() {
-    _contentMapState := [];
-    _artistTotalMapState := [];
+    _contentMap := [];
+    _artistTotalMap := [];
     _artistTotalContentMap := [];
     _tokensMap := [];
+
+    for (entry in _fanPaymentMap.vals()){
+        // entry: (FanID, (ContentID, Nat64))
+        let fanID : FanID = entry.0;
+        let id : ContentID =  entry.1.0;
+        let price : Nat64 = entry.1.1;
+        
+        switch (fanPaymentMap.get(fanID)){
+            case (?fanPayment){
+                // offer is a hashmap
+                fanPayment.put(id, price);
+                fanPaymentMap.put(fanID, fanPayment);
+            };
+            case (_){
+                let fanPayment: FanPaymentInfo = Map.HashMap<ContentID, Nat64>(1, Text.equal, Text.hash);
+                fanPayment.put(id, price);
+                fanPaymentMap.put(fanID, fanPayment);
+            };
+        };
+    };
+    
+    for (entry in _tippingMap.vals()){
+        // entry: (ArtistID, (FanID, Nat64))
+        let artistID : FanID = entry.0;
+        let fanID : FanID =  entry.1.0;
+        let amount : Nat64 = entry.1.1;
+        
+        switch (tippingMap.get(artistID)){
+            case (?tipMap){
+                // offer is a hashmap
+                tipMap.put(fanID, amount);
+                tippingMap.put(artistID, tipMap);
+            };
+            case (_){
+                let tipMap: TippingInfo = Map.HashMap<FanID, Nat64>(1, Principal.equal, Principal.hash);
+                tipMap.put(fanID, amount);
+                tippingMap.put(artistID, tipMap);
+            };
+        };
+    };
   };
-  
 // #endregion
 
 
 
+
+
+
+
+
+
+
 // #region - PPV Changing State 
-  public func addContent(id: ContentID, content : Content): async () {    contentMap.put(id, content);    };
+  public func addContent(id: ContentID, content : Content): async () {   
+    switch(contentMap.get(id)){
+      case(?exists){
+        throw Error.reject("This content ID has been taken");
+      }; case null {
+        contentMap.put(id, content);    
+      }
+    };
+  };
+
 
   public func removeContent(id: ContentID): async () {    contentMap.delete(id);    };
 
+
   private func putFanPaymentMap(fan: FanID, status: Map.HashMap<ContentID, Nat64>){   fanPaymentMap.put(fan, status);   };
 
+
   private func putArtistTotalContentMap(artist: ArtistID, amount: Nat64){   artistTotalContentMap.put(artist, amount);    };
+
+  private func putArtistTotalPerContentMap(artist: ArtistID, status: Map.HashMap<ContentID, Nat64>){   artistTotalPerContentMap.put(artist, status);   };
+
 
   private func updateArtistTotalContentMap(artist: ArtistID, amount: Nat64): async (?Nat64){
     switch(artistTotalContentMap.get(artist)){
@@ -124,7 +210,25 @@ actor Payments {
       };case null ?Nat64.fromNat(0);
     };
   };
+
+  private func updateArtistTotalPerContentMap(artist: ArtistID, id: ContentID, amount: Nat64): async (?Nat64){
+    switch(artistTotalPerContentMap.get(artist)){
+      case(?innerMap){
+        switch(innerMap.get(id)){
+          case(?currVal){
+            let newAmount = currVal + amount;
+            innerMap.replace(id, newAmount)
+
+          };case null ?Nat64.fromNat(0);
+        };
+      };case null ?Nat64.fromNat(0);
+    };
+  };
 // #endregion
+
+
+
+
 
 
 
@@ -145,7 +249,7 @@ actor Payments {
                 nestedMap.replace(fan, newAmount)
             };
             case null ?Nat64.fromNat(0);
-            };
+          };
         };
         case null ?Nat64.fromNat(0);
     };
@@ -168,10 +272,11 @@ actor Payments {
 
 
 
+
+
+
+
 // #region - Transfer  
-
-
-
 public func topUpTokenWallet(amount: Nat64, from: Principal) : async (){
     // TODO:
     // * Transfer amount to trax account
@@ -180,6 +285,7 @@ public func topUpTokenWallet(amount: Nat64, from: Principal) : async (){
     // * Update state 
 
 };
+
 
 public func sendTip(from: FanID, to: ArtistID, amount: Nat64) : async (){
 
@@ -205,7 +311,7 @@ public func sendTip(from: FanID, to: ArtistID, amount: Nat64) : async (){
                         Debug.print("DID NOT update tipMapping for artist: " # debug_show to # " in block " # debug_show res);
                     }else{
                         Debug.print("UPDATED tipMapping for artist: " # debug_show to # " in block " # debug_show res);
-                    }
+                    };
                 };
                 case null {
                     var x = Map.HashMap<Principal, Nat64>(2, Principal.equal, Principal.hash);
@@ -230,7 +336,6 @@ public func purchaseContent(id: ContentID, fan: Principal) : async (){
     var publisherPercentage : Percentage = 0;
     var participants: [Participants] = [];
     let now = Time.now();
-    
 
     switch(contentMap.get(id)){
       case(?content){
@@ -243,43 +348,45 @@ public func purchaseContent(id: ContentID, fan: Principal) : async (){
       case null { throw Error.reject("Could not find content object"); }
     };
 
-    // if publisher/artist receives 100% (i.e. 1) then a staright forward transaction takes place
-    if(publisherPercentage == 1){
-      switch(publisherID){
-        case (?artist) { 
-          switch(await transfer(fan, artist, price)){
+      for(collabs in Iter.fromArray(participants)){
+        
+        let amountFloat : Float = Float.fromInt(Nat64.toNat(price));
+        let participantsCut : Nat64 =  Nat64.fromNat(Int.abs(Float.toInt(amountFloat * collabs.participantPercentage)));
 
-            case(#ok(res)){ // update state 
+        switch(await transfer(fan, collabs.participantID, participantsCut)){
+            case(#ok(res)){ 
 
-              // var x = Map.HashMap<contentID, Nat64>(2, Nat32.equal, func (a : Nat32) : Nat32 {a});
-              var x = Map.HashMap<ContentID, Nat64>(2, Text.equal, Text.hash);
-              x.put(id, price);
-              putFanPaymentMap(fan, x);
-
-              switch(artistTotalContentMap.get(artist)){
-                case(?exists){
-                  var update = await updateArtistTotalContentMap(artist, price);
-                }; case null {
-                  putArtistTotalContentMap(artist, price);
-                }
-              };
-
-              Debug.print("Paid artist: " # debug_show artist # " in block " # debug_show res);
-
-            }; case(#err(msg)){
-              throw Error.reject("Unexpected error: " # debug_show msg);
-            };
+              await artistTotalContentMapHelper(collabs.participantID, participantsCut);
+              await artistTotalPerContentMapHelper(collabs.participantID, id, participantsCut);
+              Debug.print("Paid artist: " # debug_show collabs.participantID # " in block " # debug_show res);
+            }; case(#err(msg)){   throw Error.reject("Unexpected error: " # debug_show msg);    };
           };
-        };
-        case null { };
       };
-      
-    }else{
-      // var collabs = participants.toArray()
-    };
-    
-  };
 
+      
+      switch(publisherID){  
+        case (?artist) { 
+          let pubAmountFloat : Float = Float.fromInt(Nat64.toNat(price));
+          let publishersCut :  Nat64 = Nat64.fromNat(Int.abs(Float.toInt(pubAmountFloat * publisherPercentage)));
+ 
+            switch(await transfer(fan, artist, publishersCut)){
+                  case(#ok(res)){ 
+
+                    var x = Map.HashMap<ContentID, Nat64>(2, Text.equal, Text.hash);
+                    x.put(id, price);
+                    putFanPaymentMap(fan, x);
+
+                    await artistTotalContentMapHelper(artist, publishersCut );
+                    await artistTotalPerContentMapHelper(artist, id, publishersCut );
+                    Debug.print("Paid artist: " # debug_show artist # " in block " # debug_show res);
+                  }; case(#err(msg)){   throw Error.reject("Unexpected error: " # debug_show msg);    };
+                };
+        }; case null { };
+      };
+
+};
+
+ 
 
   private func platformDeduction(fan: FanID, amount : Nat64) : async Nat64 {
     let traxAccount: Principal = Principal.fromText(TRAX_ACCOUNT);
@@ -297,7 +404,6 @@ public func purchaseContent(id: ContentID, fan: Principal) : async (){
 
     return Nat64.fromNat(Int.abs(Float.toInt(amountFloat - deduction)));
   };
-
 
 
   func transfer(from: Principal, to: Principal, amount: Nat64): async Result.Result<Nat64, Text>{
@@ -334,6 +440,10 @@ public func purchaseContent(id: ContentID, fan: Principal) : async (){
 
 
 
+
+
+
+
 // #region - PPV Query State
   public query func fanHasPaid(id: ContentID, fan: FanID) : async Bool{
     var price : Nat64 = 0;
@@ -362,11 +472,6 @@ public func purchaseContent(id: ContentID, fan: Principal) : async (){
     };
   };
 
-  // private func getUserPaymentMap(user: UserID) : async [(contentID, Nat64)] {
-  //          let success = userPaymentMap.get(user);
-  //           Iter.toArray(userPaymentMap.entries());
-  // };
-
   public query func showSize () : async Nat {   contentMap.size();    };
 
   public query func getContentMapByID(id : Text) : async ?Content {   contentMap.get(id);   };
@@ -374,11 +479,12 @@ public func purchaseContent(id: ContentID, fan: Principal) : async (){
   public query func showEntriesOfContentMap () : async [(ContentID, Content)] {   Iter.toArray(contentMap.entries());   };
 
   public query func getArtistTotalContentMap(artist: ArtistID) : async ?Nat64{    artistTotalContentMap.get(artist);    };
-
-  // public query func getCurrentContentID() : async contentID {
-  //   nextContentId;
-  // };
 // #endregion
+
+
+
+
+
 
 
 
@@ -399,6 +505,40 @@ public func purchaseContent(id: ContentID, fan: Principal) : async (){
 
     public func getArtistTotalMap(artist: ArtistID) : async ?Nat64 {    artistTotalTipsMap.get(artist);   };
 //#endregion
+
+
+
+
+
+
+
+
+
+
+// #region - PPV Helper function 
+private func artistTotalContentMapHelper(artist: ArtistID, amount: Nat64) : async (){
+    switch(artistTotalContentMap.get(artist)){
+      case(?exists){
+        var update = await updateArtistTotalContentMap(artist, amount);
+      }; case null {
+        putArtistTotalContentMap(artist, amount);
+      }
+    };
+ };
+
+ private func artistTotalPerContentMapHelper(artist: ArtistID, id: ContentID, amount: Nat64) : async () {
+    switch(artistTotalPerContentMap.get(artist)){
+      case(?exists){
+        var update = await updateArtistTotalPerContentMap(artist, id, amount);
+      }; case null {
+        var x = Map.HashMap<ContentID, Nat64>(2, Text.equal, Text.hash);
+        x.put(id, amount);
+        putArtistTotalPerContentMap(artist, x);
+      }
+    };
+ };
+ // #endregion
+
 
 
 
