@@ -67,13 +67,15 @@ module {
 
   public type Token =           { symbol : Text; };
   public type ArtistID          = Principal;
-  public type UserID            =  Principal;
-  public type contentID         = Nat32;
+  public type FanID            =  Principal;
+  public type ContentID         = Text;
   public type ICPTs             = { e8s : Nat64 };
   public type AdminID           = Principal;
   public type AccountId         = Blob;
-  public type SubaccountBlob = Nat8;
+  public type SubaccountBlob    = Nat8;
   public type AccountIdText     = Text;
+  public type Percentage        = Float;
+  public type ParticipantID     = Principal;
 
   public type AccessType = ?{ 
     #ppv;
@@ -87,15 +89,19 @@ module {
         amount: ICPTs;
     };
 
+  // public type Particiants = Map.HashMap<ParticipantID, Percentage>(1, Principal.equal, Principal.hash);
   public type Content = {
     publisher: ArtistID;
+    publisherPercentage:  Percentage;
     price: Nat64;
-    accessType: AccessType;
+    participants: [Participants];
+    // participants: ?[(Percentage, ParticipantID)];
+    // accessType: AccessType;
   };
 
-  public type User = {
-    userId: UserID;
-    status: ContentStatus;
+  public type Participants = {
+    participantID: ParticipantID;
+    participantPercentage: Percentage;
   };
   
   public type ContentStatus = ?{ 
