@@ -75,7 +75,6 @@ module {
   public type SubaccountBlob    = Nat8;
   public type AccountIdText     = Text;
   public type Percentage        = Float;
-  public type ParticipantID     = Principal;
 
   public type AccessType = ?{ 
     #ppv;
@@ -100,7 +99,7 @@ module {
   };
 
   public type Participants = {
-    participantID: ParticipantID;
+    participantID: ArtistID;
     participantPercentage: Percentage;
   };
   
