@@ -8,7 +8,7 @@ import Iter "mo:base/Iter";
 import Float "mo:base/Float";
 import Result "mo:base/Result";
 
-module {
+module Types{
 
   public type AccountIdentifier = {
     #text : Text;
@@ -107,4 +107,58 @@ module {
     #unlocked;
     #locked;
   };
+
+  public type HttpHeader = {
+        name : Text;
+        value : Text;
+    };
+
+    public type HttpMethod = {
+        #get;
+        #post;
+        #head;
+    };
+
+
+  public type TransformContext = {
+        function : shared query TransformArgs -> async CanisterHttpResponsePayload;
+        context : Blob;
+    };
+
+    public type CanisterHttpRequestArgs = {
+        url : Text;
+        max_response_bytes : ?Nat64;
+        headers : [HttpHeader];
+        body : ?[Nat8];
+        method : HttpMethod;
+        transform : ?TransformContext;
+    };
+
+    public type CanisterHttpResponsePayload = {
+        status : Nat;
+        headers : [HttpHeader];
+        body : [Nat8];
+    };
+
+    public type TransformArgs = {
+        response : CanisterHttpResponsePayload;
+        context : Blob;
+    };
+
+    public type IC = actor {
+        http_request : CanisterHttpRequestArgs -> async CanisterHttpResponsePayload;
+    };
+
+
+    public type HttpRequest = {
+        method: Text;
+        url: Text;
+        headers: [(Text, Text)];
+        body: Blob;
+    };
+    public type HttpResponse = {
+        status_code: Nat16;
+        headers: [(Text, Text)];
+        body: Blob;
+    };
 }

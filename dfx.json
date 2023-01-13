@@ -18,6 +18,10 @@
         "ledger"
       ]
     },
+    "fetch_price": {
+      "main": "src/trax_payments_backend/fetchPrice.mo",
+      "type": "motoko"
+    },
     "trax_payments_frontend": {
       "dependencies": [
         "trax_payments_backend"
