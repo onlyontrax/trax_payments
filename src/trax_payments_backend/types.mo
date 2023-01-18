@@ -75,6 +75,9 @@ module Types{
   public type SubaccountBlob    = Nat8;
   public type AccountIdText     = Text;
   public type Percentage        = Float;
+  public type Ticker                    = Text;
+  public type Timestamp                 = Nat64;
+  public type SubPrice                  = Float;
 
   public type AccessType = ?{ 
     #ppv;
@@ -108,6 +111,7 @@ module Types{
     #locked;
   };
 
+  // HTTP OUTPUT TYPES 
   public type HttpHeader = {
         name : Text;
         value : Text;
@@ -119,8 +123,7 @@ module Types{
         #head;
     };
 
-
-  public type TransformContext = {
+    public type TransformContext = {
         function : shared query TransformArgs -> async CanisterHttpResponsePayload;
         context : Blob;
     };
@@ -146,19 +149,8 @@ module Types{
     };
 
     public type IC = actor {
-        http_request : CanisterHttpRequestArgs -> async CanisterHttpResponsePayload;
+        http_request : Types.CanisterHttpRequestArgs -> async Types.CanisterHttpResponsePayload;
     };
 
 
-    public type HttpRequest = {
-        method: Text;
-        url: Text;
-        headers: [(Text, Text)];
-        body: Blob;
-    };
-    public type HttpResponse = {
-        status_code: Nat16;
-        headers: [(Text, Text)];
-        body: Blob;
-    };
 }
