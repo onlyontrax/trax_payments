@@ -84,6 +84,11 @@ module Types{
     #subscriber;
   };
 
+  public type SubscriptionType = { 
+    #monthly;
+    #yearly;
+  };
+
   type TransferRequest = {
         info: Text;
         from: Principal;
