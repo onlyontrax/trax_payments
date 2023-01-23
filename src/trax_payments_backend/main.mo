@@ -25,6 +25,7 @@ import TrieMap    "mo:base/TrieMap";
 import Cycles "mo:base/ExperimentalCycles";
 import Char "mo:base/Char";
 import Int64 "mo:base/Int64";
+// import Timer "mo:base/Timer";
 
 
 // TODO
@@ -119,9 +120,10 @@ actor Payments {
   };
 
   // system func timer(set : Nat64 -> ()) : async () {
-  //   set(fromIntWrap(Time.now()) + 60_000_000_000); // 60 seconds from now
-  //   doSomething();
+  //   set(Nat64.fromIntWrap(Time.now()) + 60_000_000_000); // 60 seconds from now
+  //   await payArtistsSub();
   // };
+// let timer1 = Timer.setTimer( 365 * 24 * 60* 60 *1000000000, sayHappyAnniversary);
 
   // let hour = 60 * 60_000_000_000;
   // let deadline = Time.now() + hour; // nanos
@@ -136,8 +138,11 @@ actor Payments {
   //   set(Nat64.fromIntWrap(time + toGo / 2));
   // };
 
+ 
+
 
   public func payArtistsSub() : async (){
+    
 
     let priceICP: Float = await getCryptoPrice("ICP");
     var count = 0;
@@ -173,7 +178,7 @@ actor Payments {
                         if (period == #monthly){    nextPayment := oneMonth;    };
                         if (period == #yearly) {    nextPayment := oneYear;   };
                         // Debug.print("current timestamp " # debug_show timestamp # "next timestamp: " # debug_show (timestamp + oneMin) );
-                        var update = innerMap.replace(fanID, ((timestamp + twoMins), priceOfSub, period));
+                        var update = innerMap.replace(fanID, ((timestamp + nextPayment), priceOfSub, period));
                         // Debug.print(debug_show innerMap.get(fanID));
                       };
                       case null{};
@@ -294,6 +299,17 @@ actor Payments {
   //   }; 
   // }; 
 
+  // public func changeSubPlan(artist: ArtistID, fan: FanID, period: SubscriptionType) : async(){
+  //   switch(subMap.get(artist)){
+  //     case(?innerMap){
+  //       innerMap.replace()
+
+  //     };
+  //   };
+  // };
+
+
+
   public func getArtistTotalSubRevenue(artist: ArtistID) : async ?Nat64{    artistTotalSubRevenue.get(artist)   };
 
   public func getTotalNumberOfSubs(artist: ArtistID) : async Nat32{
@@ -351,93 +367,7 @@ actor Payments {
       priceFloat;
   };
 
-
-  private func parse(result: T.CanisterHttpResponsePayload, k: Text): Text {
-      switch (Text.decodeUtf8(Blob.fromArray(result.body))) {
-          case null {};
-          case (?decoded) {
-              for(e:Text in Text.split(decoded, #text "{")){
-                 if(Text.contains(e, #text k)){
-               if(Text.contains(e, #text "{")){
-                  
-                 return parseVal(e, k);
-               } else {
-                 for(i:Text in Text.split(e, #text ",")){
-                   if(Text.contains(i, #text k)){
-                     for(s:Text in Text.split(i, #text ":")){
-                       if(Text.contains(s, #text k) == false){
-                         var r:Text = Text.replace(s, #text "\"", "");
-                         r := Text.replace(r, #text "]", "");
-                         r := Text.replace(r, #text "}", "");
-                        //  Debug.print("Parse res: "# debug_show r);
-                         return r;
-                       };
-                     };
-                   };
-                 };
-               };
-            };
-          };
-        };
-      };
-      return "Not found";
-    };  
-
-
-  private func parseVal(t: Text, k: Text): Text {
-      for(e:Text in Text.split(t, #text "{")){
-        if(Text.contains(e, #text k)){
-          if(Text.contains(e, #text "{")){
-            return parseVal(e, k);
-          } else {
-            for(i:Text in Text.split(e, #text ",")){
-              if(Text.contains(i, #text k)){
-                for(s:Text in Text.split(i, #text ":")){
-                  if(Text.contains(s, #text k) == false){
-                    var r:Text = Text.replace(s, #text "\"", "");
-                    r := Text.replace(r, #text "]", "");
-                    r := Text.replace(r, #text "}", "");
-                    //  Debug.print("ParseVal res: "# debug_show r);
-                    return r;
-                  };
-                };
-              };
-            };
-          };
-        };
-      };
-      return "Not found";
-  };  
-
-
-  private func textToFloat(t : Text) : async Float {  
-      var i : Float = 1;
-      var f : Float = 0;
-      var isDecimal : Bool = false;  
-      for (c in t.chars()) {
-        if (Char.isDigit(c)) {
-          let charToNat : Nat64 = Nat64.fromNat(Nat32.toNat(Char.toNat32(c) -48));
-          let natToFloat : Float = Float.fromInt64(Int64.fromNat64(charToNat));
-          if (isDecimal) {
-            let n : Float = natToFloat / Float.pow(10, i);
-            f := f + n;
-          } else {
-            f := f * 10 + natToFloat;
-          };
-          i := i + 1;
-        } else {
-          if (Char.equal(c, '.') or Char.equal(c, ',')) {
-            f := f / Float.pow(10, i); // Force decimal
-            f := f * Float.pow(10, i); // Correction
-            isDecimal := true;
-            i := 1;
-          } else {
-            throw Error.reject("NaN");
-          };
-        };
-      };  
-      return f;
-  };
+  
 
        
   public query func transform(raw : T.TransformArgs) : async T.CanisterHttpResponsePayload {
@@ -856,6 +786,93 @@ public func purchaseContent(id: ContentID, fan: Principal) : async (){
 
 
 // #region Utils
+
+  private func parse(result: T.CanisterHttpResponsePayload, k: Text): Text {
+      switch (Text.decodeUtf8(Blob.fromArray(result.body))) {
+          case null {};
+          case (?decoded) {
+              for(e:Text in Text.split(decoded, #text "{")){
+                 if(Text.contains(e, #text k)){
+               if(Text.contains(e, #text "{")){
+                  
+                 return parseVal(e, k);
+               } else {
+                 for(i:Text in Text.split(e, #text ",")){
+                   if(Text.contains(i, #text k)){
+                     for(s:Text in Text.split(i, #text ":")){
+                       if(Text.contains(s, #text k) == false){
+                         var r:Text = Text.replace(s, #text "\"", "");
+                         r := Text.replace(r, #text "]", "");
+                         r := Text.replace(r, #text "}", "");
+                        //  Debug.print("Parse res: "# debug_show r);
+                         return r;
+                       };
+                     };
+                   };
+                 };
+               };
+            };
+          };
+        };
+      };
+      return "Not found";
+    };  
+
+
+  private func parseVal(t: Text, k: Text): Text {
+      for(e:Text in Text.split(t, #text "{")){
+        if(Text.contains(e, #text k)){
+          if(Text.contains(e, #text "{")){
+            return parseVal(e, k);
+          } else {
+            for(i:Text in Text.split(e, #text ",")){
+              if(Text.contains(i, #text k)){
+                for(s:Text in Text.split(i, #text ":")){
+                  if(Text.contains(s, #text k) == false){
+                    var r:Text = Text.replace(s, #text "\"", "");
+                    r := Text.replace(r, #text "]", "");
+                    r := Text.replace(r, #text "}", "");
+                    //  Debug.print("ParseVal res: "# debug_show r);
+                    return r;
+                  };
+                };
+              };
+            };
+          };
+        };
+      };
+      return "Not found";
+  };  
+
+
+  private func textToFloat(t : Text) : async Float {  
+      var i : Float = 1;
+      var f : Float = 0;
+      var isDecimal : Bool = false;  
+      for (c in t.chars()) {
+        if (Char.isDigit(c)) {
+          let charToNat : Nat64 = Nat64.fromNat(Nat32.toNat(Char.toNat32(c) -48));
+          let natToFloat : Float = Float.fromInt64(Int64.fromNat64(charToNat));
+          if (isDecimal) {
+            let n : Float = natToFloat / Float.pow(10, i);
+            f := f + n;
+          } else {
+            f := f * 10 + natToFloat;
+          };
+          i := i + 1;
+        } else {
+          if (Char.equal(c, '.') or Char.equal(c, ',')) {
+            f := f / Float.pow(10, i); // Force decimal
+            f := f * Float.pow(10, i); // Correction
+            isDecimal := true;
+            i := 1;
+          } else {
+            throw Error.reject("NaN");
+          };
+        };
+      };  
+      return f;
+  };
   public func accountIdentifierToBlob (accountIdentifier : AccountIdentifier) : async T.AccountIdentifierToBlobResult {
     U.accountIdentifierToBlob({
       accountIdentifier;
