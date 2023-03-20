@@ -76,7 +76,7 @@ module Types{
   public type AccountIdText     = Text;
   public type Percentage        = Float;
   public type Ticker                    = Text;
-  public type Timestamp                 = Nat64;
+  public type Timestamp                 = Int;
   public type SubPrice                  = Float;
 
   public type AccessType = ?{ 
@@ -100,7 +100,7 @@ module Types{
   public type Content = {
     publisher: ArtistID;
     publisherPercentage:  Percentage;
-    price: Nat64;
+    price: Float; // usd price
     participants: [Participants];
     // participants: ?[(Percentage, ParticipantID)];
     // accessType: AccessType;
