@@ -37,7 +37,8 @@ import Timer "mo:base/Timer";
 // * add in msg.caller param to suitable 
 
 // * Add mag.caller param to payment functions.
-// * 
+// * Change Int.hash to own hashing function or use Stable hashmap 
+// 
 
 
 // import E "../exchange_rate/main";
@@ -60,6 +61,7 @@ actor Payments {
   type Participants              = T.Participants;
   private type ContentToAmount   = Map.HashMap<ContentID, Nat64>;
   private type FanToTime         = Map.HashMap<FanID, (Timestamp, Nat64)>;
+  private type HashToTx          = Map.HashMap<Hash.Hash, (FanID, Timestamp, Nat64)>; 
   
   private type SubInfo   = Map.HashMap<FanID, (Timestamp, SubPrice, SubType)>;
 
@@ -74,7 +76,7 @@ actor Payments {
 
   var subMap = Map.HashMap<ArtistID, SubInfo>(1, Principal.equal, Principal.hash); // Mapping keeping trax of artist a fan subscribes to and the timestamp of next subscription payment.
   var artistTotalSubRevenue = Map.HashMap<ArtistID, Nat64>(1, Principal.equal, Principal.hash); // total revenue earned through subs
-
+  var subTx = Map.HashMap<ArtistID, HashToTx>(1, Principal.equal, Principal.hash); 
 
   //PPV
   private stable var _contentMap : [(ContentID, Content)] = [];
@@ -107,6 +109,11 @@ actor Payments {
 
 
 
+
+
+  // public func hashData(timestamp: Timestamp, amount: Nat64) : async Hash.Hash{
+
+  // };
 
 
   system func timer(set : Nat64 -> ()) : async () {
@@ -516,21 +523,23 @@ actor Payments {
 
 
   public query func getAllArtistContentIDs(artist: ArtistID) : async [ContentID] {
-    var ids : [ContentID] = [];
+
+    var ids = Buffer.Buffer<ContentID>(2);
+
     for(entries in contentMap.entries()){
       if(entries.1.publisher == artist){
         var id = entries.0;
-        ids := Array.append(ids, [id]);
+        ids.add(id);
       } else {
         for(i in Iter.fromArray(entries.1.participants)){
           if(artist == i.participantID){
             var id = entries.0;
-            ids := Array.append(ids, [id]);
+            ids.add(id);
           }
         }
       }
     };
-    return ids;
+    return Buffer.toArray(ids);
   };
 
 
@@ -549,9 +558,10 @@ actor Payments {
 
   // };
 
-  public func getAllArtistContentPayments(artist: ArtistID) : async [(FanID, (Timestamp, Nat64))]{  
+  public func getAllArtistContentPayments(artist: ArtistID) : async [(FanID, Timestamp, Nat64)]{  
     let contentIds =  await getAllArtistContentIDs(artist);
-    var res: [(FanID, (Timestamp, Nat64))] = [];
+
+    var res = Buffer.Buffer<(FanID, Timestamp, Nat64)>(2);
 
     for(entries in contentPaymentMap.entries()){
 
@@ -564,7 +574,7 @@ actor Payments {
                 var fanId: FanID = i.0;
                 var timestamp: Timestamp = i.1.0;
                 var amount: Nat64 = i.1.1;
-                res := Array.append(res, [(fanId, (timestamp, amount))])
+                res.add(fanId, timestamp, amount);
               }
             }; case null { }
           };
@@ -572,28 +582,28 @@ actor Payments {
         };
       };
     };
-    return res;
+    return Buffer.toArray(res);
 
   };
 
-  public func getAllFanContentPayments(fan: FanID) : async [(FanID, (Timestamp, Nat64))]{ 
-    var res: [(FanID, (Timestamp, Nat64))] = [];
+  public func getAllFanContentPayments(fan: FanID) : async [(ContentID, Timestamp, Nat64)]{ 
+    var res = Buffer.Buffer<(ContentID, Timestamp, Nat64)>(2);
 
     for(entries in contentPaymentMap.entries()){ 
       switch(contentPaymentMap.get(entries.0)){
         case(?innerMap){
           for(i in innerMap.entries()){
             if(i.0 == fan){
-              var fanId: FanID = i.0;
+                var contentId: ContentID = entries.0;
                 var timestamp: Timestamp = i.1.0;
                 var amount: Nat64 = i.1.1;
-                res := Array.append(res, [(fanId, (timestamp, amount))])
+                res.add(contentId, timestamp, amount);
             }
           }
         }; case null {};
       }
     };
-    return res;
+    return Buffer.toArray(res);
   };
 
   // public query func getArtistTotalPerContentMap(artist: ArtistID, contentID: ContentID) : async ?Nat64{
@@ -684,8 +694,8 @@ actor Payments {
     };
   };
 
-  public query func getTipDataFan(fan: FanID) : async  [(ArtistID, (Timestamp, (FanID, Nat64)))]{
-    var data: [(ArtistID, (Timestamp, (FanID, Nat64)))] = [];
+  public query func getTipDataFan(fan: FanID) : async  [(ArtistID, Timestamp, FanID, Nat64)]{
+    var data = Buffer.Buffer<(ArtistID, Timestamp, FanID, Nat64)>(2);
 
     for(entries in tippingMap.entries()){
      var artist: ArtistID = entries.0;
@@ -698,14 +708,14 @@ actor Payments {
               var timestamp: Timestamp = i.0;
               var amount: Nat64 = i.1.1;
               var fanId: FanID = i.1.0;
-              data := Array.append(data, [(artist, (timestamp, (fanId, amount)))]);
+              data.add(artist, timestamp, fanId, amount);
                 // data :=  Array.append((artist, (timestamp, (fanId, amount))));
               }
           }
         };case null { };
       };
     };
-  return data;
+  return Buffer.toArray(data);
   };
 
   public query func getTipDataArtist(artist: ArtistID) : async  ?[(Timestamp, (FanID, Nat64))]{
