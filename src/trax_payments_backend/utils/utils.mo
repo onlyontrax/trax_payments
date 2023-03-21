@@ -2,7 +2,7 @@ import SHA224     "./SHA224";
 import A          "./account";
 import CRC32      "./CRC32";
 import Hex        "./Hex";
-import T          "./types";
+import T          "../types";
 import Array      "mo:base/Array";
 import Blob       "mo:base/Blob";
 import Buffer     "mo:base/Buffer";
@@ -11,7 +11,7 @@ import Nat8       "mo:base/Nat8";
 import Nat32      "mo:base/Nat32";
 import Principal  "mo:base/Principal";
 import Text       "mo:base/Text";
-import Env        "./env";
+import Env        "../env";
 
 module {
   type AccountIdentifier = T.AccountIdentifier;

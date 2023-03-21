@@ -4,28 +4,29 @@ import Principal  "mo:base/Principal";
 import Nat        "mo:base/Nat";
 import Nat32      "mo:base/Nat32";
 import Nat64      "mo:base/Nat64";
+import Nat8       "mo:base/Nat64";
 import Text       "mo:base/Text";
 import Iter       "mo:base/Iter";
 import Float      "mo:base/Float";
 import T          "./types";
 import Ledger     "canister:ledger";
-import Account    "./account";
+import Account    "./utils/account";
 import Time       "mo:base/Time";
 import Int        "mo:base/Int";
 import Error      "mo:base/Error";
 import Debug      "mo:base/Debug";
 import Result     "mo:base/Result";
-import U          "./utils";
-import Hex        "./Hex";
+import U          "./utils/utils";
+import Hex        "./utils/Hex";
 import Blob       "mo:base/Blob";
 import Array      "mo:base/Array";
 import Buffer     "mo:base/Buffer";
 import Trie       "mo:base/Trie";
 import TrieMap    "mo:base/TrieMap";
-import Cycles "mo:base/ExperimentalCycles";
-import Char "mo:base/Char";
-import Int64 "mo:base/Int64";
-import Timer "mo:base/Timer";
+import Cycles     "mo:base/ExperimentalCycles";
+import Char       "mo:base/Char";
+import Int64      "mo:base/Int64";
+import Timer      "mo:base/Timer";
 
 
 // TODO
@@ -34,17 +35,14 @@ import Timer "mo:base/Timer";
 // * Ability to pause subscriptions (feature)
 
 // * onlyOwner checks throughout contract 
-// * add in msg.caller param to suitable 
-
 // * Add mag.caller param to payment functions.
 // * Change Int.hash to own hashing function or use Stable hashmap 
-// 
+// * Optimise SC memory and speed, checking types and function logic
 
 
 // import E "../exchange_rate/main";
 
 actor Payments {
-  // minter2 phrase: hundorp
   type ContentID                 = T.ContentID;
   type Content                   = T.Content;
   type ArtistID                  = T.ArtistID;
@@ -58,12 +56,13 @@ actor Payments {
   type SubType                   = T.SubscriptionType;
   type SubAccount                = Blob;
   type Percentage                = T.Percentage;
+  type TransactionID             = T.TransactionID;
   type Participants              = T.Participants;
-  private type ContentToAmount   = Map.HashMap<ContentID, Nat64>;
-  private type FanToTime         = Map.HashMap<FanID, (Timestamp, Nat64)>;
-  private type HashToTx          = Map.HashMap<Hash.Hash, (FanID, Timestamp, Nat64)>; 
-  
-  private type SubInfo   = Map.HashMap<FanID, (Timestamp, SubPrice, SubType)>;
+
+  private type FanToTime         = Map.HashMap<FanID, (Timestamp, Nat64, Ticker)>;
+  private type TxIDToData          = Map.HashMap<TransactionID, (FanID, Timestamp, Nat64, Ticker)>; 
+  private type SubInfo   = Map.HashMap<FanID, (Timestamp, SubPrice, SubType, Ticker)>;
+  private type SubRevenue = Map.HashMap<Ticker, Nat64>;
 
   stable var TRAX_ACCOUNT: Text = "2l26f-kcxq2-2rwa7-zy36b-3wive-m3hfd-xrbr4-gocr4-7rklt-gmj4y-nqe";
   let FEE : Nat64 = 10000;
@@ -71,25 +70,29 @@ actor Payments {
 
 
   //SUBSCRIPTIONS
-  private stable var _subMap : [(ArtistID, (FanID, (Timestamp, SubPrice, SubType)))] = [];
-  private stable var _artistTotalSubRevenue : [(ArtistID, Nat64)] = [];
+  private stable var _subMap : [(ArtistID, (FanID, (Timestamp, SubPrice, SubType, Ticker)))] = [];
+  private stable var _artistTotalSubRevenue : [(ArtistID, (Ticker, Nat64))] = [];
+  private stable var _subTxMap : [(ArtistID, (TransactionID, (FanID, Timestamp, Nat64, Ticker)))] = [];
 
   var subMap = Map.HashMap<ArtistID, SubInfo>(1, Principal.equal, Principal.hash); // Mapping keeping trax of artist a fan subscribes to and the timestamp of next subscription payment.
-  var artistTotalSubRevenue = Map.HashMap<ArtistID, Nat64>(1, Principal.equal, Principal.hash); // total revenue earned through subs
-  var subTx = Map.HashMap<ArtistID, HashToTx>(1, Principal.equal, Principal.hash); 
+  var artistTotalSubRevenue = Map.HashMap<ArtistID, SubRevenue>(1, Principal.equal, Principal.hash); // total revenue earned through subs
+  var subTxMap = Map.HashMap<ArtistID, TxIDToData>(1, Principal.equal, Principal.hash); 
+
+
 
   //PPV
   private stable var _contentMap : [(ContentID, Content)] = [];
-  private stable var _contentPaymentMap : [(ContentID, (FanID, (Timestamp, Nat64)))] = [];
+  private stable var _contentPaymentMap : [(ContentID, (FanID, (Timestamp, Nat64, Ticker)))] = [];
 
   var contentMap = Map.HashMap<ContentID, Content>(1, Text.equal, Text.hash); // ContentID -> Content data: publisherID, publisher %age, participantsID, participants %age, price. 
   var contentPaymentMap = Map.HashMap<ContentID, FanToTime>(1, Text.equal, Text.hash); // true false conditional which verifies whether a fan has paid.
 
 
-  //TIPPING 
-  private type TippingInfo       = Map.HashMap<Timestamp, (FanID, Nat64)>;
 
-  private stable var _tippingMap : [(ArtistID, (Timestamp, (FanID, Nat64)))] = [];
+  //TIPPING 
+  private type TippingInfo       = Map.HashMap<Timestamp, (FanID, Nat64, Ticker)>;
+
+  private stable var _tippingMap : [(ArtistID, (Timestamp, (FanID, Nat64, Ticker)))] = [];
 
   var tippingMap = Map.HashMap<ArtistID, TippingInfo>(1, Principal.equal, Principal.hash); // Keep record of every tip transaction
 
@@ -151,32 +154,24 @@ actor Payments {
   private func payArtistsSub() : async (){
 
     let priceICP: Float = await getCryptoPrice("ICP");
-    var count = 0;
-    // let priceICP: Float = 5;
-    // Debug.print("@payArtistsSub ICP Price: "#debug_show priceICP);
 
     for(ids in subMap.entries()){
-          // Debug.print(debug_show ids.0);
+          
           let artistID : ArtistID = ids.0;
           let subInfo: SubInfo =  ids.1;
             for (info in subInfo.entries()){
-              count := count +1;
-              
-              // Debug.print(debug_show (info.0, info.1.0, info.1.1));
 
               let fanID : FanID = info.0;
               let timestamp : Timestamp = info.1.0;
               let priceOfSub : SubPrice = info.1.1;
               let period : SubType = info.1.2;
+              let ticker : Ticker = info.1.3;
               
-
           if(Time.now() > timestamp){
 
             Debug.print("period: " # debug_show period);
             var nextPayment : Int = 0;
             let amount : Nat64 = await platformDeduction(fanID, Nat64.fromIntWrap(Float.toInt((priceOfSub / priceICP) * 100000000)));
-            // let amount : Nat64 = await getRemainingAfterDeduction(Nat64.fromIntWrap(Float.toInt((priceOfSub / priceICP) * 100000000)), 0.10);
-            Debug.print("amount after deduction: " # debug_show amount);
 
             switch(await transfer(fanID, artistID, amount)){
               case(#ok(res)){
@@ -186,9 +181,9 @@ actor Payments {
                       case(?currVals){
                         if (period == #monthly){    nextPayment := twoMins;    };
                         if (period == #yearly) {    nextPayment := fourMins;   };
-                        // Debug.print("current timestamp " # debug_show timestamp # "next timestamp: " # debug_show (timestamp + oneMin) );
-                        var update = innerMap.replace(fanID, ((timestamp + nextPayment), priceOfSub, period));
-                        // Debug.print(debug_show innerMap.get(fanID));
+                        
+                        var update = innerMap.replace(fanID, ((timestamp + nextPayment), priceOfSub, period, ticker));
+                      
                       };
                       case null {   Debug.print("Couldnt find or access FanID in subMap");    };
                     };
@@ -196,14 +191,29 @@ actor Payments {
                   case null {   Debug.print("Couldnt find or access ArtistID in subMap");    };
                 };
 
-                //update state for artist sub revenue 
                 switch(artistTotalSubRevenue.get(artistID)){
-                  case(?currVal){   var update = artistTotalSubRevenue.replace(artistID, (currVal + amount));   };
-                  case null {   artistTotalSubRevenue.put(artistID, amount);    };
+                  case(?innerMap){   
+                    switch(innerMap.get(ticker)){
+                      case(?currVal){
+                        var update = innerMap.replace(ticker, currVal + amount);   
+                      }; 
+                      case null {
+                        innerMap.put(ticker, amount)
+                      };
+                    };
+                  };
+                  case null {   
+                    var x : SubRevenue = Map.HashMap<Ticker, Nat64>(2, Text.equal, Text.hash);
+                    x.put(ticker, amount);
+                    artistTotalSubRevenue.put(artistID, x); 
+                  };
                 };
+
+                await addToSubTxMap(artistID, fanID, timestamp, amount, ticker);
               }; 
               case(#err(msg)){  
                 let success = await unsubscribe(artistID, fanID);
+                Debug.print(debug_show success);
                 // assert(success);
                 throw Error.reject("Your subscription has been terminated due to: " # debug_show msg);
                 return
@@ -212,9 +222,9 @@ actor Payments {
           };
         };
       };
-      Debug.print("Number of entries: " # debug_show count);
   };
 
+  
 
 
   public func subscribe(artist: ArtistID, fan: FanID, priceOfSub: Float, ticker: Ticker, period: SubType, freeTrial: Bool, freeDays: Int): async Bool{
@@ -228,14 +238,15 @@ actor Payments {
     
 
     if(freeTrial){
-      await addToSubMap(artist, fan, priceOfSub, period, freeTrial, freeDays);
+      await addToSubMap(artist, fan, priceOfSub, period, freeTrial, freeDays, ticker);
       true;
     }else{
       var amountICP = await platformDeduction(fan, Nat64.fromIntWrap(Float.toInt((priceOfSub / priceICP) * 100000000)));
       // var amountICP = await getRemainingAfterDeduction(Nat64.fromIntWrap(Float.toInt((priceOfSub / priceICP) * 100000000)), 0.10);
       switch(await transfer(fan, artist, amountICP)){
           case(#ok(res)){
-            await addToSubMap(artist, fan, priceOfSub, period, freeTrial, freeDays);
+            await addToSubMap(artist, fan, priceOfSub, period, freeTrial, freeDays, ticker);
+            await addToSubTxMap(artist, fan, Time.now(), amountICP, ticker);
             true;
             }; case(#err(msg)){
               throw Error.reject("Unexpected error: " # debug_show msg);
@@ -247,7 +258,7 @@ actor Payments {
 
 
 
-  private func addToSubMap(artist: ArtistID, fan: FanID, priceOfSub: Float, period: SubType, freeTrial: Bool, freeDays: Int) : async (){
+  private func addToSubMap(artist: ArtistID, fan: FanID, priceOfSub: Float, period: SubType, freeTrial: Bool, freeDays: Int, ticker: Ticker) : async (){
     let timeNow = Time.now();
     var nextPayment: Int = 0;
     if (period == #monthly){    nextPayment := twoMins;    };
@@ -257,29 +268,82 @@ actor Payments {
       case(?innerMap){
         
         if (freeTrial){
-          innerMap.put(fan, (timeNow + (oneDay * freeDays), priceOfSub, period));
+          innerMap.put(fan, (timeNow + (oneDay * freeDays), priceOfSub, period, ticker));
           Debug.print("Fan subscribed with free trial, first payment is at: " # debug_show (timeNow + (oneDay * freeDays)));
         } 
         else {
-          innerMap.put(fan, (timeNow + nextPayment, priceOfSub, period));
+          innerMap.put(fan, (timeNow + nextPayment, priceOfSub, period, ticker));
           Debug.print("Fan subscribed, next payment is at: " # debug_show (timeNow + nextPayment));
         };
         // Debug.print("Fan subscribed, next payment is at: " # debug_show (Nat64.fromIntWrap(Time.now()) + nextPayment));
 
       }; case null {
-        var x : SubInfo = Map.HashMap<FanID, (Timestamp, Float, SubType)>(2, Principal.equal, Principal.hash);
+        var x : SubInfo = Map.HashMap<FanID, (Timestamp, Float, SubType, Ticker)>(2, Principal.equal, Principal.hash);
 
         if(freeTrial){    
-          x.put(fan, (timeNow + (oneDay * freeDays), priceOfSub, period));
-          Debug.print("Fan subscribed to new artist with free trial, first payment is at: " # debug_show (timeNow + nextPayment));
+          let res = timeNow + (oneDay * freeDays);
+          Debug.print(debug_show res);
+          x.put(fan, (timeNow + (oneDay * freeDays), priceOfSub, period, ticker));
+          Debug.print("Fan subscribed to new artist with free trial, first payment is at: " # debug_show (timeNow + (oneDay * freeDays)));
         }else{
-           x.put(fan, (timeNow + nextPayment, priceOfSub, period));
+           x.put(fan, (timeNow + nextPayment, priceOfSub, period, ticker));
            Debug.print("Fan subscribed to new artist, next payment is at:" # debug_show (timeNow + nextPayment));
         };
 
         subMap.put(artist, x);
       };
     };
+  };
+
+
+
+  private func addToSubTxMap(artist: ArtistID, fan: FanID, timestamp: Timestamp, amount: Nat64, ticker: Ticker) : async (){
+    let idFan: Text = Principal.toText(fan);
+    let stamp : Text = Int.toText(timestamp);
+    let key : Text = stamp # idFan;
+    Debug.print("hash text: " # debug_show key);
+
+    switch(subTxMap.get(artist)){
+      case(?innerMap){
+        innerMap.put(key, (fan, timestamp, amount, ticker));
+      }; 
+      case null {
+        var x : TxIDToData = Map.HashMap<TransactionID, (FanID, Timestamp, Nat64, Ticker)>(2, Text.equal, Text.hash);
+        x.put(key, (fan, timestamp, amount, ticker));
+        subTxMap.put(artist, x);
+      };
+    };
+  };
+
+
+
+  public func getSubTxMapArtist(artist: ArtistID) : async ?[(TransactionID, (FanID, Timestamp, Nat64, Ticker))]{
+    switch(subTxMap.get(artist)){
+        case(?innerMap){
+          ?Iter.toArray(innerMap.entries()); 
+        };case null null;
+      };
+  };
+
+
+
+  public func getSubTxMapFan(fan: ArtistID) : async [(TransactionID, ArtistID, Timestamp, Nat64, Ticker)]{
+    var res = Buffer.Buffer<(TransactionID, ArtistID, Timestamp, Nat64, Ticker)>(2);
+        for(entries in subTxMap.entries()){
+          let artistId : ArtistID = entries.0;
+          for(i in entries.1.entries()){
+            let fanId : FanID = i.1.0;
+            if(fanId == fan){
+              let txId : Text = i.0;
+              let timestamp : Timestamp = i.1.1;
+              let amount: Nat64 = i.1.2;
+              let ticker : Ticker = i.1.3;
+
+              res.add(txId, artistId, timestamp, amount, ticker);
+            };
+          };
+        };
+    return Buffer.toArray(res);
   };
 
 
@@ -312,7 +376,14 @@ actor Payments {
 
 
 
-  public func getArtistTotalSubRevenue(artist: ArtistID) : async ?Nat64{    artistTotalSubRevenue.get(artist)   };
+  public func getArtistTotalSubRevenue(artist: ArtistID, ticker:Ticker) : async ?Nat64{    
+    switch(artistTotalSubRevenue.get(artist)){
+      case(?innerMap){
+        innerMap.get(ticker);
+      };
+      case null null;
+    }   
+  };
 
 
 
@@ -456,11 +527,11 @@ actor Payments {
                       switch(contentPaymentMap.get(id)){
                         case(?innerMap){
                           
-                          innerMap.put(fan, (now, amountToSend));
+                          innerMap.put(fan, (now, amountToSend, ticker));
                           
                         }; case null {
-                          var x = Map.HashMap<FanID, (Timestamp, Nat64)>(2, Principal.equal, Principal.hash);
-                          x.put(fan, (now, amountToSend));
+                          var x = Map.HashMap<FanID, (Timestamp, Nat64, Ticker)>(2, Principal.equal, Principal.hash);
+                          x.put(fan, (now, amountToSend, ticker));
                           contentPaymentMap.put(id, x);
                         }
                       };
@@ -534,10 +605,13 @@ actor Payments {
         for(i in Iter.fromArray(entries.1.participants)){
           if(artist == i.participantID){
             var id = entries.0;
+            Debug.print("getAllArtistContentIDs id: " # debug_show id);
             ids.add(id);
-          }
+
+          };
+          Debug.print("getAllArtistContentIDs ids: " # debug_show Buffer.toArray(ids));
         }
-      }
+      };
     };
     return Buffer.toArray(ids);
   };
@@ -637,18 +711,17 @@ actor Payments {
 
 
 // #region -TIPPING  
-  public func sendTip(fan: FanID, artist: ArtistID, amount: Nat64) : async (){
+  public func sendTip(fan: FanID, artist: ArtistID, amount: Nat64, ticker: Ticker) : async (){
     let now = Time.now();
       switch(await transfer(fan, artist, amount)){
         case(#ok(res)){
-          switch(tippingMap.get(fan)){
+          switch(tippingMap.get(artist)){
               case(?innerMap){
-                innerMap.put(now, (fan, amount));
-
+                innerMap.put(now, (fan, amount, ticker));
               };
               case null {
-                  var x : TippingInfo = Map.HashMap<Timestamp, (FanID, Nat64)>(2, Int.equal, Int.hash);
-                  x.put(now, (fan, amount));
+                  var x : TippingInfo = Map.HashMap<Timestamp, (FanID, Nat64, Ticker)>(2, Int.equal, Int.hash);
+                  x.put(now, (fan, amount, ticker));
                   tippingMap.put(artist, x);
               };
           };
@@ -662,7 +735,7 @@ actor Payments {
   };
 
 
-  public query func getTotalTipsFromFan(artist: ArtistID, fan: FanID) : async Nat64 {
+  public query func getTotalTipsFromFan(artist: ArtistID, fan: FanID) : async Nat64 { // *** FIX
     var total: Nat64 = 0;
           switch(tippingMap.get(artist)){
             case(?nestedMap){
@@ -679,7 +752,7 @@ actor Payments {
           };
   };
 
-  public query func getTotalTips(artist: ArtistID) : async Nat64 {
+  public query func getTotalTips(artist: ArtistID) : async Nat64 {  // *** FIX
     var total: Nat64 = 0;
     switch(tippingMap.get(artist)){
       case(?nestedMap){
@@ -699,15 +772,19 @@ actor Payments {
 
     for(entries in tippingMap.entries()){
      var artist: ArtistID = entries.0;
+     Debug.print("ArtistID's: " # debug_show artist);
 
       switch(tippingMap.get(artist)){
         case(?innerMap){
 
           for(i in innerMap.entries()){
-            if(i.1.0 == fan){
+            var fanId: FanID = i.1.0;
+            Debug.print("FanID's: " # debug_show fanId);
+            
+            if(fanId == fan){
               var timestamp: Timestamp = i.0;
               var amount: Nat64 = i.1.1;
-              var fanId: FanID = i.1.0;
+              
               data.add(artist, timestamp, fanId, amount);
                 // data :=  Array.append((artist, (timestamp, (fanId, amount))));
               }
@@ -718,7 +795,8 @@ actor Payments {
   return Buffer.toArray(data);
   };
 
-  public query func getTipDataArtist(artist: ArtistID) : async  ?[(Timestamp, (FanID, Nat64))]{
+  public query func getTipDataArtist(artist: ArtistID, ticker: Ticker) : async  ?[(Timestamp, (FanID, Nat64, Ticker))]{
+
       switch(tippingMap.get(artist)){
         case(?innerMap){
           ?Iter.toArray(innerMap.entries()); 
@@ -974,8 +1052,10 @@ actor Payments {
 // #region - Upgrading state
   system func preupgrade() {
     _contentMap := Iter.toArray(contentMap.entries());
-    _artistTotalSubRevenue := Iter.toArray(artistTotalSubRevenue.entries());
+    // _artistTotalSubRevenue := Iter.toArray(artistTotalSubRevenue.entries());
     // _tokensMap := Iter.toArray(tokensMap.entries());
+
+
 
     _subMap := [];
         for (subs in subMap.entries()){
@@ -988,8 +1068,9 @@ actor Payments {
                 let timestamp : Timestamp = details.1.0;
                 let subPrice : SubPrice = details.1.1;
                 let subType : SubType = details.1.2;
+                let ticker : Ticker = details.1.3;
   
-                _subMap := Array.append(_subMap, [(artistID, (fanID,(timestamp, subPrice, subType)))]);
+                _subMap := Array.append(_subMap, [(artistID, (fanID,(timestamp, subPrice, subType, ticker)))]);
             };
         };
 
@@ -1003,8 +1084,9 @@ actor Payments {
                 let fanID : FanID = payment.0;
                 let timestamp : Timestamp = payment.1.0;
                 let amount : Nat64 = payment.1.1;
+                let ticker : Ticker = payment.1.2;
   
-                _contentPaymentMap := Array.append(_contentPaymentMap, [(contentID,(fanID, (timestamp, amount)))])
+                _contentPaymentMap := Array.append(_contentPaymentMap, [(contentID,(fanID, (timestamp, amount, ticker)))])
             };
         };
     
@@ -1018,8 +1100,9 @@ actor Payments {
                 let timestamp : Timestamp = info.0;
                 let fanID : FanID = info.1.0;
                 let amount : Nat64 = info.1.1;
+                let ticker : Ticker = info.1.2;
   
-                _tippingMap := Array.append(_tippingMap, [(artistID,(timestamp, (fanID, amount)))])
+                _tippingMap := Array.append(_tippingMap, [(artistID,(timestamp, (fanID, amount, ticker)))])
             };
         };
     
@@ -1043,8 +1126,8 @@ actor Payments {
     contentMap := Map.fromIter<ContentID, Content>(_contentMap.vals(), 10, Text.equal, Text.hash);
     _contentMap := [];
 
-    artistTotalSubRevenue := Map.fromIter<ArtistID, Nat64>(_artistTotalSubRevenue.vals(), 10, Principal.equal, Principal.hash);
-    _artistTotalSubRevenue := [];
+    // artistTotalSubRevenue := Map.fromIter<ArtistID, Nat64>(_artistTotalSubRevenue.vals(), 10, Principal.equal, Principal.hash);
+    // _artistTotalSubRevenue := [];
     
 
     for (entry in _contentPaymentMap.vals()){
@@ -1053,16 +1136,17 @@ actor Payments {
         let id : ContentID =  entry.0;
         let timestamp : Timestamp = entry.1.1.0;
         let amount : Nat64 = entry.1.1.1;
+        let ticker : Ticker = entry.1.1.2;
         
         switch (contentPaymentMap.get(id)){
             case (?contentPayment){
                 // offer is a hashmap
-                contentPayment.put(fanID, (timestamp, amount));
+                contentPayment.put(fanID, (timestamp, amount, ticker));
                 contentPaymentMap.put(id, contentPayment);
             };
             case (_){
-                let contentPayment: FanToTime = Map.HashMap<FanID, (Timestamp, Nat64)>(1, Principal.equal, Principal.hash);
-                contentPayment.put(fanID, (timestamp, amount));
+                let contentPayment: FanToTime = Map.HashMap<FanID, (Timestamp, Nat64, Ticker)>(1, Principal.equal, Principal.hash);
+                contentPayment.put(fanID, (timestamp, amount, ticker));
                 contentPaymentMap.put(id, contentPayment);
             };
         };
@@ -1074,16 +1158,17 @@ actor Payments {
         let timestamp: Timestamp = entry.1.0;
         let fanID : FanID =  entry.1.1.0;
         let amount : Nat64 = entry.1.1.1;
+        let ticker : Ticker = entry.1.1.2;
         
         switch (tippingMap.get(artistID)){
             case (?tipMap){
                 // offer is a hashmap
-                tipMap.put(timestamp, (fanID, amount));
+                tipMap.put(timestamp, (fanID, amount, ticker));
                 tippingMap.put(artistID, tipMap);
             };
             case (_){
-                let tipMap: TippingInfo = Map.HashMap<Timestamp, (FanID, Nat64)>(1, Int.equal, Int.hash);
-                tipMap.put(timestamp, (fanID, amount));
+                let tipMap: TippingInfo = Map.HashMap<Timestamp, (FanID, Nat64, Ticker)>(1, Int.equal, Int.hash);
+                tipMap.put(timestamp, (fanID, amount, ticker));
                 tippingMap.put(artistID, tipMap);
             };
         };
@@ -1115,17 +1200,18 @@ actor Payments {
         let timestamp : Timestamp = entry.1.1.0;
         let subPrice : SubPrice = entry.1.1.1;
         let subType : SubType = entry.1.1.2;
+        let ticker : Ticker = entry.1.1.3;
 
         
         switch (subMap.get(artistID)){
             case (?subInfo){
 
-                subInfo.put(fanID,(timestamp, subPrice, subType));
+                subInfo.put(fanID,(timestamp, subPrice, subType, ticker));
                 subMap.put(artistID, subInfo);
             };
             case (_){
-                let subInfo: SubInfo = Map.HashMap<FanID, (Timestamp, SubPrice, SubType)>(1, Principal.equal, Principal.hash);
-                subInfo.put(fanID,(timestamp, subPrice, subType));
+                let subInfo: SubInfo = Map.HashMap<FanID, (Timestamp, SubPrice, SubType, Ticker)>(1, Principal.equal, Principal.hash);
+                subInfo.put(fanID,(timestamp, subPrice, subType, ticker));
                 subMap.put(artistID, subInfo);
             };
         };

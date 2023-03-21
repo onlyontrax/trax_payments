@@ -78,6 +78,7 @@ module Types{
   public type Ticker                    = Text;
   public type Timestamp                 = Int;
   public type SubPrice                  = Float;
+  public type TransactionID     = Text;
 
   public type AccessType = ?{ 
     #ppv;
