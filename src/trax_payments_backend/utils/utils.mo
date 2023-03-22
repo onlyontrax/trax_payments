@@ -11,7 +11,7 @@ import Nat8       "mo:base/Nat8";
 import Nat32      "mo:base/Nat32";
 import Principal  "mo:base/Principal";
 import Text       "mo:base/Text";
-import Env        "../env";
+import Env        "./env";
 
 module {
   type AccountIdentifier = T.AccountIdentifier;
@@ -25,9 +25,9 @@ module {
     hasPrivilege(caller, Env.admin);
   };
 
-  public func isManager(caller : Principal) : Bool {
-    hasPrivilege(caller, Env.manager);
-  };
+  // public func isManager(caller : Principal) : Bool {
+  //   hasPrivilege(caller, Env.manager);
+  // };
 
   private func hasPrivilege(caller : Principal, privileges : [Text]) : Bool {
     func toPrincipal(entry : Text) : Principal {
