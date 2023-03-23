@@ -7,7 +7,6 @@ import Nat8       "mo:base/Nat64";
 import Text       "mo:base/Text";
 import Iter       "mo:base/Iter";
 import T          "./types";
-import Ledger     "canister:ledger";
 import Account    "./utils/account";
 import Time       "mo:base/Time";
 import Int        "mo:base/Int";
@@ -25,6 +24,8 @@ import Cycles     "mo:base/ExperimentalCycles";
 import Char       "mo:base/Char";
 import Int64      "mo:base/Int64";
 import Timer      "mo:base/Timer";
+
+import Ledger     "canister:ledger";
 
 
 actor Tipping {

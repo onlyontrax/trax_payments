@@ -9,7 +9,6 @@ import Text       "mo:base/Text";
 import Iter       "mo:base/Iter";
 import Float      "mo:base/Float";
 import T          "./types";
-import Ledger     "canister:ledger";
 import Account    "./utils/account";
 import Time       "mo:base/Time";
 import Int        "mo:base/Int";
@@ -27,8 +26,11 @@ import Cycles     "mo:base/ExperimentalCycles";
 import Char       "mo:base/Char";
 import Int64      "mo:base/Int64";
 import Timer      "mo:base/Timer";
-import XRC        "canister:xrc";
 import Env        "./utils/env";
+
+import Ledger     "canister:ledger";
+import XRC        "canister:xrc";
+
 
 // TODO
 // * Add functionality for PPV content (royalty sharing) to be able change participants and revenue share after initial posting
@@ -36,7 +38,7 @@ import Env        "./utils/env";
 // * Ability to pause subscriptions (feature)
 
 // * onlyOwner checks throughout contract 
-// * Add mag.caller param to payment functions.
+// * Add msg.caller param to payment functions.
 // * Change Int.hash to own hashing function or use Stable hashmap 
 // * Optimise SC memory and speed, checking types and function logic
 
@@ -59,6 +61,7 @@ actor Subscriptions {
   type Percentage                = T.Percentage;
   type TransactionID             = T.TransactionID;
   type Participants              = T.Participants;
+  type Strikes                   = Nat;
 
   
   private type FanToTime          = Map.HashMap<FanID, (Timestamp, Nat64, Ticker)>;
@@ -69,6 +72,8 @@ actor Subscriptions {
   private type FanToTxData         = Map.HashMap<FanID, TxData>; 
   private type TxData             = Map.HashMap<Timestamp, (Nat64, Ticker)>; 
 
+  private type FanToStrikes     = Map.HashMap<ArtistID, Strikes>; 
+
   let FEE : Nat64 = 10000;
   stable var txNo : Nat64 = 0;
 
@@ -77,11 +82,13 @@ actor Subscriptions {
   private stable var _subMap : [(ArtistID, (FanID, (Timestamp, SubPrice, SubType, Ticker)))] = [];
   private stable var _artistTotalSubRevenue : [(ArtistID, (Ticker, Nat64))] = [];
   private stable var _subTxMap : [(ArtistID, (FanID, (Timestamp, (Nat64, Ticker))))] = [];
+  private stable var _latePaymentMap : [(FanID, (ArtistID, Strikes))] = [];
 
 
   var subTxMap = Map.HashMap<ArtistID, FanToTxData>(1, Principal.equal, Principal.hash); 
   var subMap = Map.HashMap<ArtistID, SubInfo>(1, Principal.equal, Principal.hash); // Mapping keeping trax of artist a fan subscribes to and the timestamp of next subscription payment.
   var artistTotalSubRevenue = Map.HashMap<ArtistID, SubRevenue>(1, Principal.equal, Principal.hash); // total revenue earned through subs
+  var latePaymentMap = Map.HashMap<FanID, FanToStrikes>(1, Principal.equal, Principal.hash); 
   
 
   var count          =                      0;
@@ -126,15 +133,10 @@ actor Subscriptions {
     await payArtistsSub();
   };
 
-private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
-    let bal = await accountBalance(fan);
-    if(bal.e8s >= amount){
-        return true;
-    }else{
-        throw Error.reject("Insufficient Balance: " # debug_show bal.e8s); 
-        return false;
-    }
-};
+
+
+
+
 
   private func payArtistsSub() : async (){ // balance check
 
@@ -174,49 +176,19 @@ private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
                         if (period == #yearly) {    nextPayment := fourMins;   };
                         
                         var update = innerMap.replace(fanID, ((timestamp + nextPayment), priceOfSub, period, ticker));
-                      
-                      };
+                      }; 
                       case null {   Debug.print("Couldnt find or access FanID in subMap");    };
                     };
                   };
                   case null {   Debug.print("Couldnt find or access ArtistID in subMap");    };
                 };
-
-                switch(artistTotalSubRevenue.get(artistID)){
-                  case(?innerMap){   
-                    switch(innerMap.get(ticker)){
-                      case(?currVal){
-                        var update = innerMap.replace(ticker, currVal + amount);   
-                      }; 
-                      case null {
-                        innerMap.put(ticker, amount)
-                      };
-                    };
-                  };
-                  case null {   
-                    var x : SubRevenue = Map.HashMap<Ticker, Nat64>(2, Text.equal, Text.hash);
-                    x.put(ticker, amount);
-                    artistTotalSubRevenue.put(artistID, x); 
-                  };
-                };
-
+                
+                await updateArtistTotalSubRevenue(artistID, ticker, amount);
                 await addToSubTxMap(artistID, fanID, timestamp, amount, ticker);
               }; 
-              // case (#Err(#InsufficientFunds { balance })) {
-              //   let success = await unsubscribe(artistID, fanID);
-              //   Debug.print(debug_show success);
-              //   throw Error.reject("Insufficient balance of " # debug_show balance # " from account:" # debug_show fanID # " fan has been unsubscribed!")
-            
-              // };
               case(#err(msg)){  
-                Debug.print("ERROR at payArtistSub: " # debug_show msg);
-                let success = await unsubscribe(artistID, fanID);
-                Debug.print(debug_show success);
-                
-
-                // // assert(success);
-                // throw Error.reject("Your subscription has been terminated due to: " # debug_show msg);
-                // return
+                await updateLatePaymentMap(artistID, fanID);
+                Debug.print("ERROR at payArtistSub, this fan has been flagged as a late payer: " # debug_show msg);
               };
             };
           };
@@ -225,6 +197,7 @@ private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
   };
 
   
+
 
 
   public shared(msg) func subscribe(artist: ArtistID, fan: FanID, priceOfSub: Float, ticker: Ticker, period: SubType, freeTrial: Bool, freeDays: Int): async Bool{
@@ -261,6 +234,7 @@ private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
       };
     };
   };
+
 
 
 
@@ -303,6 +277,96 @@ private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
 
 
 
+
+
+  private func updateArtistTotalSubRevenue(artist: ArtistID, ticker: Ticker, amount: Nat64) : async (){
+    switch(artistTotalSubRevenue.get(artist)){
+      case(?innerMap){   
+        switch(innerMap.get(ticker)){
+          case(?currVal){
+            var update = innerMap.replace(ticker, currVal + amount);   
+          }; 
+          case null {
+            innerMap.put(ticker, amount)
+          };
+        };
+      };
+      case null {   
+        var x : SubRevenue = Map.HashMap<Ticker, Nat64>(2, Text.equal, Text.hash);
+        x.put(ticker, amount);
+        artistTotalSubRevenue.put(artist, x); 
+      };
+    };
+  };
+
+
+
+
+
+  private func updateLatePaymentMap(artist: ArtistID, fan: FanID) : async () {
+    switch(latePaymentMap.get(fan)){
+      case(?innerMap){
+        switch(innerMap.get(artist)){
+          case(?currVal){
+            if(currVal >= 5){
+              let success = await unsubscribe(fan, artist);
+            }else{
+              let update = innerMap.replace(artist, currVal + 1);
+            };
+          };
+          case null {
+            innerMap.put(artist, 1);
+          }
+        };
+      };
+
+      case null {
+        var x : FanToStrikes = Map.HashMap<FanID, Strikes>(1, Principal.equal, Principal.hash);
+        x.put(fan, 1);
+        latePaymentMap.put(artist, x);
+      };
+    };
+  };
+
+  public func checkLatePaymentStrikes(fan: FanID, artist: ArtistID) : async Nat{
+    switch(latePaymentMap.get(fan)){
+      case (?innerMap){
+        switch(innerMap.get(artist)){
+          case(?currVal){
+            return currVal;
+          };
+          case null {
+          return 0
+          };
+        };
+      };
+      case null {
+        return 0
+      };
+    };
+  };
+
+  // public func getAllLatePayment(fan: FanID, artist: ArtistID) : async Nat{
+  //   switch(latePaymentMap.get(fan)){
+  //     case (?innerMap){
+  //       switch(innerMap.get(artist)){
+  //         case(?currVal){
+  //           return currVal;
+  //         };
+  //         case null {
+  //         return 0
+  //         };
+  //       };
+  //     };
+  //     case null {
+  //       return 0
+  //     };
+  //   };
+  // };
+
+
+
+
   private func addToSubTxMap(artist: ArtistID, fan: FanID, timestamp: Timestamp, amount: Nat64, ticker: Ticker) : async (){
     let idFan: Text = Principal.toText(fan);
     let stamp : Text = Int.toText(timestamp);
@@ -335,6 +399,8 @@ private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
 
 
 
+
+
   public func getSubTxMapArtist(artist: ArtistID) : async [(FanID, Timestamp, Nat64, Ticker)]{
     var res = Buffer.Buffer<(FanID, Timestamp, Nat64, Ticker)>(2);
 
@@ -358,6 +424,8 @@ private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
       };
       return Buffer.toArray(res);
   };
+
+
 
 
 
@@ -393,6 +461,7 @@ private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
 
 
 
+
   public func isFanSubscribed(artist: ArtistID, fan: FanID) : async Bool{
     switch(subMap.get(artist)){
       case(?innerMap){
@@ -409,6 +478,7 @@ private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
 
 
 
+
   public func unsubscribe(artist: ArtistID, fan: FanID) : async Bool{
     switch(subMap.get(artist)){
       case(?innerMap){
@@ -421,6 +491,7 @@ private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
 
 
 
+
   public func getArtistTotalSubRevenue(artist: ArtistID, ticker:Ticker) : async ?Nat64{    
     switch(artistTotalSubRevenue.get(artist)){
       case(?innerMap){
@@ -429,6 +500,7 @@ private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
       case null null;
     }   
   };
+
 
 
 
@@ -445,6 +517,7 @@ private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
       }
     }
   };
+
 
 // #endregion
 
@@ -505,6 +578,19 @@ public func getExchangeRate(symbol : Text) : async Float {
     let priceFloat : Float = Float.fromInt(Nat64.toNat(amount));
     return Nat64.fromNat(Int.abs(Float.toInt(priceFloat * percent)));
   };
+
+
+
+  private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
+      let bal = await accountBalance(fan);
+      if(bal.e8s >= amount){
+          return true;
+      }else{
+          throw Error.reject("Insufficient Balance: " # debug_show bal.e8s); 
+          return false;
+      }
+  };
+
 // #endregion
 
 

@@ -9,7 +9,6 @@ import Text       "mo:base/Text";
 import Iter       "mo:base/Iter";
 import Float      "mo:base/Float";
 import T          "./types";
-import Ledger     "canister:ledger";
 import Account    "./utils/account";
 import Time       "mo:base/Time";
 import Int        "mo:base/Int";
@@ -27,10 +26,13 @@ import Cycles     "mo:base/ExperimentalCycles";
 import Char       "mo:base/Char";
 import Int64      "mo:base/Int64";
 import Timer      "mo:base/Timer";
-import XRC        "canister:xrc";
 import Env        "./utils/env";
+
+import Ledger     "canister:ledger";
+import XRC        "canister:xrc";
+
 // TODO
-// * Add functionality for PPV content (royalty sharing) to be able change participants and revenue share after initial posting
+
 // * Adding tiers to subscriptions? (feature)
 // * Ability to pause subscriptions (feature)
 
@@ -142,8 +144,6 @@ private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
       let priceCrypto = await getExchangeRate(ticker);
       var amountToSend : Nat64 = 0;
       let bal = await accountBalance(fan);
-      
-
 
       switch(contentMap.get(id)){
         case(?content){
@@ -251,8 +251,8 @@ private func checkBalance(fan: FanID, amount: Nat64) : async Bool {
     switch(contentPaymentMap.get(id)){
       case(?nestedMap){
         switch(nestedMap.get(fan)){
-          case(?timestamp){
-            if (timestamp.0 > 0){   
+          case(?data){
+            if (data.0 > 0){   
               true;
             }else{
               false;
